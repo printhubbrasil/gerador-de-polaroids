@@ -40,6 +40,7 @@ def pasta():
 PASTA = pasta()
 ARQ_CONFIG = PASTA / "config.json"
 ARQ_PERFIS = PASTA / "perfis.json"
+ARQ_AJUSTES = PASTA / "ajustes.json"          # enquadramento feito à mão, por foto
 ARQ_LOG = PASTA / "registro.txt"
 
 

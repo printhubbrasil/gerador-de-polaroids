@@ -19,8 +19,9 @@ from tkinter import colorchooser, filedialog, messagebox, ttk
 from PIL import Image, ImageTk
 
 from . import fontes, motor as M, registro as R
+from .editor import Editor
 
-VERSAO = "2.0"
+VERSAO = "2.1"
 
 # cores da janela (as do programa antigo)
 BG, CARD, FG, MUTED = "#1C1C2E", "#2A2A3E", "#FFFFFF", "#9E9EBB"
@@ -117,6 +118,9 @@ class App:
         self.cfg = M.completar(salvo.get("cfg"))
         self.pasta = salvo.get("pasta", "")
         self.perfis = R.ler_json(R.ARQ_PERFIS, {})
+        self.ajustes = R.ler_json(R.ARQ_AJUSTES, {})   # caminho da foto -> enquadramento à mão
+        self.editor = None
+        self._prev_geo = None
 
         self._montar()
         self._para_tela(self.cfg)
@@ -409,9 +413,14 @@ class App:
         self.lbl_pag = self._rotulo(self.nav, "1 / 1", FG, 9)
         self.lbl_pag.pack(side="left", padx=8)
         self._botao(self.nav, "›", lambda: self._virar(1)).pack(side="left")
+        self.lbl_dica_prev = self._rotulo(direita, "Clique numa foto da prévia pra mover, aproximar ou girar.", MUTED, 8)
+        self.lbl_dica_prev.pack(side="bottom", fill="x")
         self.palco = tk.Canvas(direita, bg="#141420", highlightthickness=0)
         self.palco.pack(fill="both", expand=True, pady=(6, 6))
         self.palco.bind("<Configure>", lambda e: self._agendar(150))
+        self.palco.bind("<Button-1>", self._clicou_previa)
+        self.palco.bind("<Motion>", lambda e: self.palco.configure(
+            cursor="hand2" if self._foto_no_ponto(e.x, e.y) is not None else ""))
         self.lbl_info = self._rotulo(direita, "", FG, 9)
         self.lbl_info.pack(fill="x")
         self.lbl_erro = self._rotulo(direita, "", PERIGO, 9, "bold")
@@ -595,13 +604,14 @@ class App:
         cfg = self.cfg
         fotos = list(self.fotos)
         pagina = self.pagina
+        ajustes = dict(self.ajustes)
 
         def trabalho():
             try:
                 fw, fh = M.medidas_folha(cfg)
                 largura = int(min(larg, alt * fw / fh))
-                img, _ = M.previa(fotos, cfg, largura, pagina, self._cache_prev, self._miniatura)
-                self.fila.put(("previa", ger, img))
+                img, lay = M.previa(fotos, cfg, largura, pagina, self._cache_prev, self._miniatura, ajustes)
+                self.fila.put(("previa", ger, img, (lay, pagina, fotos, cfg)))
             except Exception as e:
                 R.tombo("prévia", e)
 
@@ -609,13 +619,46 @@ class App:
             self._cache_prev.clear()
         threading.Thread(target=trabalho, daemon=True).start()
 
-    def _mostrar_previa(self, img):
+    def _mostrar_previa(self, img, geo=None):
         self._previa_img = ImageTk.PhotoImage(img)
         self.palco.delete("all")
         w, h = self.palco.winfo_width(), self.palco.winfo_height()
+        if geo:                                          # pra saber em qual foto o clique caiu
+            lay, pagina, fotos, cfg = geo
+            self._prev_geo = (w / 2 - img.width / 2, h / 2 - img.height / 2,
+                              img.width / lay["folha"][0], lay, pagina, fotos, cfg)
         self.palco.create_rectangle(w / 2 - img.width / 2 + 4, h / 2 - img.height / 2 + 4,
                                     w / 2 + img.width / 2 + 4, h / 2 + img.height / 2 + 4, fill="#0B0B12", width=0)
         self.palco.create_image(w / 2, h / 2, image=self._previa_img)
+
+    # ── ajustar uma foto (clique na prévia) ──────────────────────────────────
+    def _foto_no_ponto(self, px, py):
+        """Índice em self.fotos da polaroid debaixo do ponto da prévia, ou None."""
+        if not self._prev_geo:
+            return None
+        x0, y0, k, lay, pagina, fotos, cfg = self._prev_geo
+        if fotos != self.fotos:
+            return None
+        xm, ym = (px - x0) / k, (py - y0) / k
+        cw, ch = lay["celula"]
+        fila = M.fila_de_fotos(fotos, cfg)
+        for i, (x, y) in enumerate(lay["posicoes"]):
+            if x <= xm <= x + cw and y <= ym <= y + ch:
+                n = pagina * lay["por_folha"] + i
+                return fotos.index(fila[n]) if n < len(fila) else None
+        return None
+
+    def _clicou_previa(self, e):
+        i = self._foto_no_ponto(e.x, e.y)
+        if i is None or self.gerando:
+            return
+        if self.editor is not None and self.editor.winfo_exists():
+            self.editor.fechar()
+        self.editor = Editor(self, i)
+
+    def _ajustes_mudaram(self):
+        R.gravar_json(R.ARQ_AJUSTES, self.ajustes)
+        self._agendar(10)
 
     # ── fotos ─────────────────────────────────────────────────────────────────
     def _escolher_pasta(self):
@@ -730,10 +773,11 @@ class App:
         self.barra.configure(maximum=total, value=0)
         R.anotar(f"gerar: {total} polaroids, {paginas} folhas → {destino}")
         fotos = list(self.fotos)
+        ajustes = dict(self.ajustes)
 
         def trabalho():
             try:
-                info = M.gerar_pdf(fotos, cfg, destino,
+                info = M.gerar_pdf(fotos, cfg, destino, ajustes=ajustes,
                                    progresso=lambda i, n, nome: self.fila.put(("prog", i, n, nome)),
                                    cancelar=lambda: self._cancelar)
                 self.fila.put(("fim", info))
@@ -768,7 +812,7 @@ class App:
                 msg = self.fila.get_nowait()
                 tipo = msg[0]
                 if tipo == "previa" and msg[1] == self._previa_ger:
-                    self._mostrar_previa(msg[2])
+                    self._mostrar_previa(msg[2], msg[3] if len(msg) > 3 else None)
                 elif tipo == "fontes":
                     self.fontes = msg[1]
                     atual = self.cfg["legenda"].get("fonte", "")

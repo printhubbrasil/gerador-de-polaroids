@@ -231,5 +231,33 @@ else:
 prev, lay = M.previa(FOTOS, {"giro": "em_pe"}, 400)
 conferir("prévia tem a proporção da folha", abs(prev.width / prev.height - 210 / 297) < 0.01, prev.size)
 
+print("\n9 · enquadramento à mão (ajuste)")
+meia = TMP / "meia.png"
+im = Image.new("RGB", (1200, 600), (220, 30, 30)); im.paste((30, 30, 220), (600, 0, 1200, 600)); im.save(meia)
+cfg9 = M.completar({"polaroid": {"w": 88, "h": 107, "lat": 4.5, "topo": 4.5, "foto_h": 79}, "contorno_foto": False})
+ppm = 100 / 25.4
+meio_foto = (int((4.5 + 39.5) * ppm), int((4.5 + 39.5) * ppm))
+p, _ = M.montar_polaroid(M.abrir_foto(meia), cfg9, "", 100, {"cx": 0.1, "cy": 0.5, "zoom": 1})
+conferir("cx perto da esquerda mostra o lado vermelho", p.getpixel(meio_foto)[0] > 180, p.getpixel(meio_foto))
+p, _ = M.montar_polaroid(M.abrir_foto(meia), cfg9, "", 100, {"cx": 0.9, "cy": 0.5, "zoom": 1})
+conferir("cx perto da direita mostra o lado azul", p.getpixel(meio_foto)[2] > 180, p.getpixel(meio_foto))
+p, _ = M.montar_polaroid(M.abrir_foto(meia), cfg9, "", 100, {"cx": 0.5, "cy": 0.5, "zoom": 0})
+topo = p.getpixel((meio_foto[0], int((4.5 + 3) * ppm)))
+conferir("zoom mínimo: foto inteira, sobra moldura em cima", min(topo) > 240, topo)
+p, _ = M.montar_polaroid(M.abrir_foto(meia), cfg9, "", 100, {"cx": 0.5, "cy": 0.5, "zoom": 1, "giro": 90})
+conferir("girar 90° deixa a foto em pé (vermelho em cima)", p.getpixel((meio_foto[0], int((4.5 + 10) * ppm)))[0] > 180,
+         p.getpixel((meio_foto[0], int((4.5 + 10) * ppm))))
+aj = M.limpar_ajuste(Image.new("RGB", (1200, 600)), 79, 79, {"cx": 5, "cy": -3, "zoom": 99})
+conferir("ajuste maluco fica dentro da foto", aj["zoom"] == M.ZOOM_MAX and 0 <= aj["cx"] <= 1 and aj["cy"] == min(1, aj["cy"]), aj)
+destino = TMP / "ajuste.pdf"
+M.gerar_pdf([meia], {**cfg9, "giro": "em_pe", "marcas": {"ligado": False}}, destino,
+            ajustes={str(meia): {"cx": 0.9, "cy": 0.5, "zoom": 1}})
+doc = fitz.open(str(destino)); r = doc[0].get_image_info()[0]["bbox"]
+pix = doc[0].get_pixmap(dpi=50, clip=fitz.Rect(r[0] + (r[2] - r[0]) / 2 - 2, r[1] + 44.5 * 72 / 25.4 - 2,
+                                                   r[0] + (r[2] - r[0]) / 2 + 2, r[1] + 44.5 * 72 / 25.4 + 2))
+cor = pix.pixel(0, 0)
+conferir("o PDF usa o ajuste (azul no meio)", cor[2] > 180 and cor[0] < 100, cor)
+doc.close()
+
 print(f"\n{'═' * 70}\n{ok}/{ok + falhas} passaram" + ("  — tudo certo" if not falhas else ""))
 sys.exit(1 if falhas else 0)

@@ -1,4 +1,4 @@
-# Gerador de Polaroids — PrintHub Brasil (v2.0)
+# Gerador de Polaroids — PrintHub Brasil (v2.1)
 
 Monta folhas de impressão com fotos em moldura estilo Polaroid, prontas pra imprimir e cortar.
 
@@ -21,13 +21,16 @@ Monta folhas de impressão com fotos em moldura estilo Polaroid, prontas pra imp
 - **Marcas de corte**: liga/desliga, comprimento, afastamento, espessura, cor; e linha fina
   em volta de cada polaroid.
 - **Enquadramento**: centralizar no rosto, cortar pelo centro ou foto inteira.
+- **Ajuste foto a foto**: clique numa polaroid da prévia pra abrir ela grande — arraste a
+  foto dentro da moldura, aproxime ou afaste (barra, − / +), gire 90° ou volte pro automático.
+  ‹ › passam pra foto anterior/seguinte. O ajuste vale pra prévia e pro PDF e fica guardado.
 - **Legenda**: sem legenda, o mesmo texto em todas ou o nome do arquivo; fonte (as instaladas
   no computador), tamanho (ou automático), cor, alinhamento, subir/descer.
 - **Cópias** de cada foto, **resolução** (dpi) e **qualidade** do JPEG.
 - **Perfis**: guarde configurações com nome e troque num clique.
 
 Tudo fica salvo sozinho e volta na próxima abertura
-(Windows: `%APPDATA%\PrintHub\Gerador de Polaroids`).
+(Windows: `%APPDATA%\PrintHub\Gerador de Polaroids`; o ajuste de cada foto fica em `ajustes.json`).
 
 ## Pra rodar pelo código (sem .exe)
 Dois cliques em **ABRIR GERADOR.bat** (instala o que falta na primeira vez).

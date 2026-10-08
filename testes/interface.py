@@ -23,6 +23,7 @@ from polaroid import registro as R
 CAIXA = Path(tempfile.mkdtemp(prefix="polaroid_ui_"))
 R.PASTA = CAIXA
 R.ARQ_CONFIG, R.ARQ_PERFIS, R.ARQ_LOG = CAIXA / "config.json", CAIXA / "perfis.json", CAIXA / "registro.txt"
+R.ARQ_AJUSTES = CAIXA / "ajustes.json"
 
 import tkinter as tk
 from tkinter import filedialog, messagebox
@@ -154,6 +155,50 @@ cb = app2.cb_folha; antes_v = cb.get()
 cb.event_generate("<MouseWheel>", delta=-120, when="now"); girar(0.2)
 conferir("rolar em cima da caixa da folha NÃO troca a folha", cb.get() == antes_v, (antes_v, cb.get()))
 col._roda(False)
+raiz.destroy()
+
+print("\n8 · clicar numa foto da prévia e ajustar")
+from types import SimpleNamespace as Ev
+from polaroid.editor import Editor
+A.Editor = lambda a, i: Editor(a, i, mostrar=False)          # nunca mostrar janela no teste
+raiz = tk.Tk(); raiz.withdraw()
+app3 = A.App(raiz); girar()
+conferir("prévia sabe onde está cada foto", esperar(lambda: app3._prev_geo is not None), "")
+def centro(i):                                       # sempre da prévia ATUAL (ela muda com a janela)
+    x0, y0, k, lay, *_ = app3._prev_geo
+    (x, y), (cw, ch) = lay["posicoes"][i], lay["celula"]
+    return x0 + (x + cw / 2) * k, y0 + (y + ch / 2) * k
+px, py = lambda i: centro(i)[0], lambda i: centro(i)[1]
+x0, y0 = app3._prev_geo[:2]
+conferir("clique na 2ª polaroid aponta a 2ª foto", app3._foto_no_ponto(px(1), py(1)) == 1, app3._foto_no_ponto(px(1), py(1)))
+conferir("clique fora das polaroids não abre nada", app3._foto_no_ponto(x0 + 0.5, y0 + 0.5) is None, "")
+app3._clicou_previa(Ev(x=px(0), y=py(0))); girar(0.3)
+ed = app3.editor
+conferir("abriu o editor da 1ª foto", ed is not None and ed.indice == 0, ed and ed.indice)
+cx0 = ed.aj["cx"]
+ed._pegou(Ev(x=100, y=100)); ed._arrastou(Ev(x=130, y=100)); girar(0.2)
+conferir("arrastar pra direita leva a foto pra direita", ed.aj["cx"] < cx0, (cx0, ed.aj["cx"]))
+z0 = ed.aj["zoom"]; ed._zoom_vezes(1.5); girar(0.2)
+conferir("+ aproxima", abs(ed.aj["zoom"] - z0 * 1.5) < 1e-6, (z0, ed.aj["zoom"]))
+ed._zoom_vezes(0.01); girar(0.2)
+conferir("− para na foto inteira (não some)", abs(ed.aj["zoom"] - M.zoom_minimo(*ed.foto.size, *ed.janela[2:])) < 1e-6, ed.aj["zoom"])
+ed._zoom_vezes(2); ed._ir(1); girar(0.2)
+conferir("› guarda o ajuste e vai pra próxima", ed.indice == 1 and str(app3.fotos[0]) in app3.ajustes, list(app3.ajustes))
+ed._girar(); girar(0.2)
+conferir("girar vira 90°", ed.aj["giro"] == 90, ed.aj)
+ed.fechar(); girar(0.3)
+salvos = R.ler_json(R.ARQ_AJUSTES, {})
+conferir("fechar guarda e salva em arquivo", salvos.get(str(app3.fotos[1]), {}).get("giro") == 90, salvos)
+app3._clicou_previa(Ev(x=px(2), y=py(2))); girar(0.3)
+app3.editor.fechar(); girar(0.3)
+conferir("abrir e fechar sem mexer NÃO grava ajuste", str(app3.fotos[2]) not in app3.ajustes, list(app3.ajustes))
+app3._clicou_previa(Ev(x=px(1), y=py(1))); girar(0.3)
+app3.editor._automatico(); app3.editor.fechar(); girar(0.3)
+conferir("'Automático' apaga o ajuste da foto", str(app3.fotos[1]) not in app3.ajustes, list(app3.ajustes))
+raiz.destroy()
+raiz = tk.Tk(); raiz.withdraw()
+app4 = A.App(raiz); girar()
+conferir("reabrindo: o ajuste continua lá", str(app4.fotos[0]) in app4.ajustes, list(app4.ajustes))
 raiz.destroy()
 
 print(f"\n{'═' * 70}\n{ok}/{ok + falhas} passaram" + ("  — tudo certo" if not falhas else ""))

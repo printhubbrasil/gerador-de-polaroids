@@ -297,17 +297,39 @@ def achar_rostos(img):
         return []
 
 
-def recortar(img, alvo_w, alvo_h, modo="rosto", subir_pct=4.0):
-    """O pedaço da foto que vai na janela da polaroid, na proporção alvo_w:alvo_h.
-    'inteira' não corta: devolve a foto inteira e quem cola centraliza com borda."""
-    if modo == "inteira":
-        return img, False
+# ── enquadramento (automático ou ajustado à mão) ──────────────────────────────
+# Um AJUSTE diz qual pedaço da foto aparece na janela da polaroid:
+#   {"cx": 0..1, "cy": 0..1, "zoom": z, "giro": 0|90|180|270}
+# cx/cy = centro do recorte, em fração da foto (depois de girada).
+# zoom 1 = a foto cobre a janela inteira (o que o automático faz); acima disso aproxima;
+# abaixo diminui até a foto inteira caber (o que sobra fica da cor da moldura).
+# Fração em vez de pixel: vale igual pra miniatura da prévia e pra foto cheia do PDF.
+ZOOM_MAX = 6.0
+
+
+def _cobrir(W, H, prop):
+    """Maior pedaço da foto na proporção da janela (largura, altura) em px."""
+    return (H * prop, H) if W / H > prop else (W, W / prop)
+
+
+def zoom_minimo(W, H, alvo_w, alvo_h):
+    """O zoom em que a foto inteira cabe na janela."""
     prop = alvo_w / alvo_h
+    return _cobrir(W, H, prop)[0] / max(W, H * prop)
+
+
+def girar(img, giro):
+    """Gira no sentido do relógio, em passos de 90°."""
+    g = int(_num(giro)) % 360
+    return img.rotate(-g, expand=True) if g else img
+
+
+def ajuste_auto(img, alvo_w, alvo_h, modo="rosto", subir_pct=4.0):
+    """O ajuste que o programa escolhe sozinho. Devolve (ajuste, achou_rosto)."""
     W, H = img.size
-    if W / H > prop:
-        cw, ch = H * prop, H
-    else:
-        cw, ch = W, W / prop
+    if modo == "inteira":
+        return dict(cx=0.5, cy=0.5, zoom=zoom_minimo(W, H, alvo_w, alvo_h), giro=0), False
+    cw, ch = _cobrir(W, H, alvo_w / alvo_h)
     cx, cy = W / 2, H / 2
     rostos = achar_rostos(img) if modo == "rosto" else []
     if rostos:
@@ -317,7 +339,58 @@ def recortar(img, alvo_w, alvo_h, modo="rosto", subir_pct=4.0):
         cy -= H * subir_pct / 100.0                   # rosto um pouco acima do meio fica melhor
     left = min(max(0, cx - cw / 2), W - cw)
     top = min(max(0, cy - ch / 2), H - ch)
-    return img.crop((round(left), round(top), round(left + cw), round(top + ch))), bool(rostos)
+    return dict(cx=(left + cw / 2) / W, cy=(top + ch / 2) / H, zoom=1.0, giro=0), bool(rostos)
+
+
+def limpar_ajuste(img, alvo_w, alvo_h, aj):
+    """O ajuste dentro do que a foto permite: zoom entre a foto inteira e ZOOM_MAX, e o
+    centro onde o recorte não passa da foto (no lado em que ela é maior que a janela)."""
+    W, H = img.size
+    z = min(ZOOM_MAX, max(zoom_minimo(W, H, alvo_w, alvo_h), _num(aj.get("zoom"), 1.0)))
+    bw, bh = _cobrir(W, H, alvo_w / alvo_h)
+    cw, ch = bw / z, bh / z
+
+    def prender(c, tam, lim):
+        if tam >= lim:                               # recorte maior que a foto: ela fica no meio
+            return 0.5
+        return min(max(tam / 2, c * lim), lim - tam / 2) / lim
+
+    return dict(cx=prender(_num(aj.get("cx"), 0.5), cw, W), cy=prender(_num(aj.get("cy"), 0.5), ch, H),
+                zoom=z, giro=int(_num(aj.get("giro"))) % 360)
+
+
+def caixa_do_recorte(W, H, alvo_w, alvo_h, aj):
+    """(left, top, largura, altura) do recorte em px da foto. Passa da foto quando zoom < 1."""
+    bw, bh = _cobrir(W, H, alvo_w / alvo_h)
+    cw, ch = bw / aj["zoom"], bh / aj["zoom"]
+    return aj["cx"] * W - cw / 2, aj["cy"] * H - ch / 2, cw, ch
+
+
+def desenhar_janela(img, alvo_w, alvo_h, aj, fundo=(255, 255, 255)):
+    """A janela da foto (alvo_w × alvo_h px) com o recorte do ajuste. `img` já girada."""
+    aj = limpar_ajuste(img, alvo_w, alvo_h, aj)
+    W, H = img.size
+    l, t, cw, ch = caixa_do_recorte(W, H, alvo_w, alvo_h, aj)
+    k = alvo_w / cw
+    saida = Image.new("RGB", (alvo_w, alvo_h), fundo)
+    il, it, ir, ib = max(0.0, l), max(0.0, t), min(float(W), l + cw), min(float(H), t + ch)
+    if ir - il <= 0 or ib - it <= 0:
+        return saida
+    dx, dy = int(round((il - l) * k)), int(round((it - t) * k))
+    pw = max(1, min(alvo_w - dx, int(round((ir - il) * k))))
+    ph = max(1, min(alvo_h - dy, int(round((ib - it) * k))))
+    saida.paste(img.resize((pw, ph), Image.LANCZOS, box=(il, it, ir, ib)), (dx, dy))
+    return saida
+
+
+def recortar(img, alvo_w, alvo_h, modo="rosto", subir_pct=4.0):
+    """O pedaço da foto que vai na janela da polaroid, na proporção alvo_w:alvo_h.
+    'inteira' não corta: devolve a foto inteira e quem cola centraliza com borda."""
+    if modo == "inteira":
+        return img, False
+    aj, achou = ajuste_auto(img, alvo_w, alvo_h, modo, subir_pct)
+    l, t, cw, ch = caixa_do_recorte(*img.size, alvo_w, alvo_h, aj)
+    return img.crop((round(l), round(t), round(l + cw), round(t + ch))), achou
 
 
 # ── legenda ───────────────────────────────────────────────────────────────────
@@ -351,8 +424,9 @@ def texto_da_legenda(cfg, caminho):
 
 
 # ── uma polaroid ──────────────────────────────────────────────────────────────
-def montar_polaroid(img, cfg, legenda="", dpi=None):
+def montar_polaroid(img, cfg, legenda="", dpi=None, ajuste=None):
     """A polaroid EM PÉ, como imagem RGB no tamanho do CORTE, no dpi pedido.
+    `ajuste` = o enquadramento feito à mão (ver ajuste_auto); sem ele, o automático.
     Devolve (imagem, achou_rosto)."""
     cfg = completar(cfg)
     pol = medidas_polaroid(cfg)
@@ -365,17 +439,12 @@ def montar_polaroid(img, cfg, legenda="", dpi=None):
 
     fx, fy = int(round(pol["lat"] * ppm)), int(round(pol["topo"] * ppm))
     fw, fh = px(pol["foto_w"]), px(pol["foto_h"])
-    modo = cfg["foto"].get("enquadrar", "rosto")
-    pedaco, achou = recortar(img, fw, fh, modo, _num(cfg["foto"].get("subir_rosto"), 4.0))
-    if modo == "inteira":
-        caber = pedaco.copy()
-        caber.thumbnail((fw, fh), Image.LANCZOS)
-        if caber.width < fw and caber.height < fh:           # foto pequena: aumenta até caber
-            k = min(fw / caber.width, fh / caber.height)
-            caber = pedaco.resize((max(1, int(pedaco.width * k)), max(1, int(pedaco.height * k))), Image.LANCZOS)
-        folha.paste(caber, (fx + (fw - caber.width) // 2, fy + (fh - caber.height) // 2))
+    if ajuste:
+        img, achou = girar(img, ajuste.get("giro")), False
     else:
-        folha.paste(pedaco.resize((fw, fh), Image.LANCZOS), (fx, fy))
+        ajuste, achou = ajuste_auto(img, fw, fh, cfg["foto"].get("enquadrar", "rosto"),
+                                    _num(cfg["foto"].get("subir_rosto"), 4.0))
+    folha.paste(desenhar_janela(img, fw, fh, ajuste, moldura), (fx, fy))
 
     d = ImageDraw.Draw(folha)
     if cfg.get("contorno_foto"):
@@ -454,8 +523,9 @@ def _marcas(c, lay, cfg, fh_pt):
     return len(xs), len(ys)
 
 
-def gerar_pdf(fotos, cfg, destino, progresso=None, cancelar=None):
+def gerar_pdf(fotos, cfg, destino, progresso=None, cancelar=None, ajustes=None):
     """Gera o PDF. `progresso(i, total, nome)` é chamado a cada foto.
+    `ajustes` = {caminho: ajuste} das fotos enquadradas à mão.
     Devolve um resumo: páginas, polaroids, fotos com rosto, problemas."""
     from reportlab.lib.utils import ImageReader
     from reportlab.pdfgen import canvas
@@ -503,7 +573,8 @@ def gerar_pdf(fotos, cfg, destino, progresso=None, cancelar=None):
             try:
                 if caminho not in cache:
                     img = abrir_foto(caminho)
-                    pol, achou = montar_polaroid(img, cfg, texto_da_legenda(cfg, caminho), dpi)
+                    pol, achou = montar_polaroid(img, cfg, texto_da_legenda(cfg, caminho), dpi,
+                                                 (ajustes or {}).get(str(caminho)))
                     img.close()
                     if lay["girada"]:
                         pol = pol.transpose(Image.ROTATE_90)
@@ -530,7 +601,7 @@ def gerar_pdf(fotos, cfg, destino, progresso=None, cancelar=None):
                 cancelado=False, arquivo=destino, layout=lay)
 
 
-def previa(fotos, cfg, largura_px=520, pagina=0, cache=None, abrir=None):
+def previa(fotos, cfg, largura_px=520, pagina=0, cache=None, abrir=None, ajustes=None):
     """Imagem da página `pagina` em baixa resolução, igual ao PDF (mesma geometria).
     `abrir(caminho)` devolve a foto (a janela passa uma que guarda miniaturas, pra
     não reabrir foto de 12 MP a cada número que a pessoa digita)."""
@@ -554,13 +625,15 @@ def previa(fotos, cfg, largura_px=520, pagina=0, cache=None, abrir=None):
         if i < len(bloco):
             chave = (str(bloco[i]), dpi_prev, repr(sorted(cfg["polaroid"].items())),
                      repr(sorted(cfg["foto"].items())), repr(sorted(cfg["legenda"].items())),
-                     cfg.get("moldura_cor"), cfg.get("contorno_foto"), cfg.get("contorno_cor"), lay["girada"])
+                     cfg.get("moldura_cor"), cfg.get("contorno_foto"), cfg.get("contorno_cor"), lay["girada"],
+                     repr(sorted((ajustes or {}).get(str(bloco[i]), {}).items())))
             if chave not in cache:
                 try:
                     foto = abrir(bloco[i]) if abrir else abrir_foto(bloco[i])
                     if not abrir:
                         foto.thumbnail((1200, 1200))
-                    pol, _ = montar_polaroid(foto, cfg, texto_da_legenda(cfg, bloco[i]), dpi_prev)
+                    pol, _ = montar_polaroid(foto, cfg, texto_da_legenda(cfg, bloco[i]), dpi_prev,
+                                             (ajustes or {}).get(str(bloco[i])))
                     if lay["girada"]:
                         pol = pol.transpose(Image.ROTATE_90)
                     cache[chave] = pol
